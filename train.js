@@ -1,132 +1,129 @@
-const tf = require('@tensorflow/tfjs-node');
-const Jimp = require('jimp');
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
+const tf = require('@tensorflow/tfjs-node-gpu');
+const cliProgress = require('cli-progress');
+const { createModel, prepareData } = require('./modelonly');
 
-// Define your character set
-const CHARACTERS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-const CODE_LENGTH = 5; // Adjust based on the CAPTCHA length (in your case it's 5 characters)
+// Set up readline interface
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
 
-// Load the CAPTCHA JSON file
-function loadJsonData(filePath) {
-  const data = fs.readFileSync(filePath, 'utf-8');
-  return JSON.parse(data);
+// Set up progress bar
+const progressBar = new cliProgress.SingleBar({
+  format: 'Training | {bar} | {percentage}% | {value}/{total} Epochs',
+  barCompleteChar: '\u2588',
+  barIncompleteChar: '\u2591',
+  hideCursor: true
+}, cliProgress.Presets.shades_classic);
+
+async function promptUserToReplaceModel() {
+  return new Promise((resolve) => {
+    rl.question('A model already exists. Do you want to replace it? (y/n): ', (answer) => {
+      resolve(answer.toLowerCase() === 'y');
+    });
+  });
 }
 
-// Function to load and preprocess the image
-async function loadImage(imagePath) {
-  const image = await Jimp.read(imagePath);
-  image.resize(150, 50).greyscale(); // Resize and convert to grayscale
+async function loadLabels(labelsPath) {
+  try {
+    const fullPath = path.resolve(labelsPath);
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(`Labels file not found: ${fullPath}`);
+    }
+    const data = fs.readFileSync(fullPath, 'utf8');
+    return JSON.parse(data);
+  } catch (err) {
+    console.error('Error loading labels:', err);
+    process.exit(1);
+  }
+}
 
-  // Convert the image to a tensor
-  const imageData = new Uint8Array(image.bitmap.width * image.bitmap.height);
+async function trainOrLoadModel(imagesDir, labelsPath) {
+    try {
+      const labels = await loadLabels(labelsPath);
+      
+      console.log("Loaded Labels:", labels); // 🛠 Debugging Step
+  
+      if (!labels || Object.keys(labels).length === 0) {
+        console.error('Error: Labels file is empty or invalid.');
+        process.exit(1);
+      }
+  
+      await trainModel(imagesDir, labels);
+    } catch (err) {
+      console.error('Error during training:', err);
+    } finally {
+      rl.close();
+    }
+  }
+  
+async function trainModel(imagesDir, labels) {
+  const modelDir = path.join(__dirname, 'captcha_model'); // Model folder
+  const modelPath = path.join(modelDir, 'model.json');
 
-  // Extract grayscale pixel values
-  for (let i = 0; i < image.bitmap.width * image.bitmap.height; i++) {
-    const pixel = image.bitmap.data[i * 4]; // Grayscale values are in the red channel
-    imageData[i] = pixel;
+  // Check if the model already exists
+  if (fs.existsSync(modelPath)) {
+    const replaceModel = await promptUserToReplaceModel();
+    if (!replaceModel) {
+      console.log('Using existing model.');
+      await loadModel(modelPath);
+      return;
+    }
   }
 
-  // Return the image as a tensor with shape [1, 50, 150, 1]
-  return tf.tensor(imageData, [1, 50, 150, 1], 'int32');
-}
+  console.log('Training a new model...');
 
-// Encode labels (e.g., "hxr87" -> [7, 23, 17, 8, 4])
-function encodeLabel(label) {
-  const encoded = [];
-  for (let i = 0; i < label.length; i++) {
-    const charIndex = CHARACTERS.indexOf(label[i]);
-    encoded.push(charIndex);
-  }
-  return encoded;
-}
-
-// Define the CNN model for CAPTCHA extraction
-function createModel() {
-  const model = tf.sequential();
-
-  // Conv layers
-  model.add(tf.layers.conv2d({
-    inputShape: [50, 150, 1],
-    filters: 32,
-    kernelSize: 3,
-    activation: 'relu'
-  }));
-  model.add(tf.layers.maxPooling2d({ poolSize: [2, 2] }));
-
-  model.add(tf.layers.conv2d({
-    filters: 64,
-    kernelSize: 3,
-    activation: 'relu'
-  }));
-  model.add(tf.layers.maxPooling2d({ poolSize: [2, 2] }));
-
-  // Flatten and dense layers
-  model.add(tf.layers.flatten());
-  model.add(tf.layers.dense({ units: 128, activation: 'relu' }));
-
-  // Output layer with softmax (one per character in code)
-  model.add(tf.layers.dense({
-    units: CHARACTERS.length * CODE_LENGTH,
-    activation: 'softmax'
-  }));
-
-  return model;
-}
-
-// Train the model with the dataset
-async function trainModel(jsonData) {
+  // Create a new model
   const model = createModel();
-  model.compile({
-    optimizer: 'adam',
-    loss: 'categoricalCrossentropy',
-    metrics: ['accuracy']
-  });
+  const { xs, ys } = await prepareData(imagesDir, labels);
 
-  const xs = [];
-  const ys = [];
+  // Ensure ys is float32
+  const ysProcessed = ys.toFloat();
 
-  // Load all images and labels
-  for (const [imageName, label] of Object.entries(jsonData)) {
-    const imagePath = path.join('./captchapngs', imageName); // Adjust the path to where your images are located
-    const image = await loadImage(imagePath);
-    const encodedLabel = encodeLabel(label);
-    const oneHotLabel = tf.oneHot(encodedLabel, CHARACTERS.length);
-    xs.push(image);
-    ys.push(oneHotLabel);
+  // Training parameters
+  const epochs = 10;
+  progressBar.start(epochs, 0);
+  console.log('xs shape:', xs.shape);
+  console.log('ys shape:', ysProcessed.shape);
+
+  for (let epoch = 0; epoch < epochs; epoch++) {
+    await model.fit(xs, ysProcessed, {
+      epochs: 1, // Train for 1 epoch at a time
+      batchSize: 32,
+      validationSplit: 0.2,
+      verbose: 0
+    });
+
+    // Update progress bar
+    progressBar.update(epoch + 1);
   }
 
-  const xsTensor = tf.stack(xs);
-  const ysTensor = tf.stack(ys);
+  // Stop progress bar
+  progressBar.stop();
 
-  // Train the model
-  await model.fit(xsTensor, ysTensor, {
-    epochs: 10,
-    batchSize: 32,
-    validationSplit: 0.2
-  });
+  // Ensure model directory exists before saving
+  if (!fs.existsSync(modelDir)) {
+    fs.mkdirSync(modelDir, { recursive: true });
+  }
 
-  // Save the model after training
-  await model.save('file://captcha_model');
-  console.log('Model saved!');
+  // Save the trained model
+  await model.save(`file://${modelDir}`);
+  console.log('Model trained and saved successfully.');
 }
 
-// Test the model on a new image
-async function testModel(imagePath) {
-  const model = await tf.loadLayersModel('labels.json');
-  const image = await loadImage(imagePath);
-  const prediction = model.predict(image);
-
-  const predictedClass = prediction.argMax(1).dataSync();
-  const predictedCode = predictedClass.join('');
-  console.log(`Predicted CAPTCHA code: ${predictedCode}`);
+async function loadModel(modelPath) {
+  try {
+    const modelDir = path.dirname(modelPath);
+    console.log(`Loading model from: file://${modelDir}`);
+    const model = await tf.loadLayersModel(`file://${modelDir}/model.json`);
+    console.log('Model loaded successfully.');
+  } catch (err) {
+    console.error('Error loading model:', err);
+  }
 }
 
-// Example usage
-const jsonData = loadJsonData('labels.json'); // Path to your JSON file
-
-// Uncomment this to train the model
-// trainModel(jsonData);
-
-// Uncomment this to test the model
-// testModel('./captchas/test_captcha.png');
+// Run the training or loading process
+trainOrLoadModel('./captchapngs', './somecaptchas.json');
