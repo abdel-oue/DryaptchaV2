@@ -1,5 +1,5 @@
 // model.js
-const tf = require('@tensorflow/tfjs-node-gpu');
+const tf = require('@tensorflow/tfjs-node');
 const Jimp = require('jimp');
 const path = require('path');
 const fs = require('fs');
