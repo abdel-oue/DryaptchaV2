@@ -17,7 +17,8 @@ captcha_folder = os.path.join(os.getcwd(), "captchas")
 os.makedirs(captcha_folder, exist_ok=True)
 
 # JSON file to store answers
-json_file = os.path.join(os.getcwd(), "captchas.json")
+json_file = os.path.join(os.getcwd(), "solvedCaptchas/labelsOCR.json") # change this to solvedCaptchas/labelsOCR2.json if you want to create a new file
+# else it will append to the existing file
 
 # Load existing data if JSON file exists
 if os.path.exists(json_file):

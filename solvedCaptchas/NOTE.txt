@@ -1,0 +1,11 @@
+There are three captcha label files:
+
+labelsOCR.json – This file contains captcha labels that were resolved by AI on March 17, 2025.
+
+labelsGemini.json – This file contains captcha labels that were resolved by Gemini AI using a system
+and then manually corrected. Initially, it had 31 errors out of 128 captchas, which were fixed on March 17, 2025.
+
+labelsSmall.json – A smaller test file containing only two captchas to speed up testing without processing the full dataset.
+
+These files are used for checking and labeling captchas. The Gemini file was fixed by hand to 
+be more accurate. The small test file is for quick checks without taking too much time.
