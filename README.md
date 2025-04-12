@@ -8,4 +8,4 @@ This is the Python implementation of DryaptchaV2, migrating from the original No
 ## Getting Started
 1. Clone the repository:
    ```sh
-   git clone https://github.com/yourusername/DryaptchaV2-Python.git
+   git clone https://github.com/abdel-oue/DryaptchaV2/
